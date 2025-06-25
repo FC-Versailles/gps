@@ -121,8 +121,8 @@ if "Duration" in data.columns:
         errors="coerce"
     )
 
-if "Task Name" in data.columns:
-    data["Task Name"] = data["Task Name"].str.upper().str.strip()
+if "Type" in data.columns:
+    data["Type"] = data["Type"].str.upper().str.strip()
     
 # ✅ Clean and standardize names
 if "Name" in data.columns:
@@ -143,7 +143,7 @@ if page == "Entrainement":
     allowed_tasks = ["OPTI", "MÉSO", "DRILLS", "COMPENSATION", 
                      "MACRO", "OPPO", "OPTI +", "OPTI J-1", "REATHLE"]
 
-    train_data = data[data["Task Name"].isin(allowed_tasks)].copy()
+    train_data = data[data["Type"].isin(allowed_tasks)].copy()
 
     if not pd.api.types.is_datetime64_any_dtype(train_data["Date"]):
         train_data["Date"] = pd.to_datetime(train_data["Date"], errors='coerce')
@@ -159,7 +159,7 @@ if page == "Entrainement":
         semaines = sorted(train_data["Semaine"].dropna().unique())
         selected_semaines = st.multiselect("Filtrer par semaine", semaines)
     with col3:
-        task_names = sorted(train_data["Task Name"].dropna().unique())
+        task_names = sorted(train_data["Type"].dropna().unique())
         selected_tasks = st.multiselect("Filtrer par tâche", task_names)
 
     # --- FILTRAGE ---
@@ -169,7 +169,7 @@ if page == "Entrainement":
     if selected_semaines:
         filtered = filtered[filtered["Semaine"].isin(selected_semaines)]
     if selected_tasks:
-        filtered = filtered[filtered["Task Name"].isin(selected_tasks)]
+        filtered = filtered[filtered["Type"].isin(selected_tasks)]
 
     st.dataframe(filtered, use_container_width=True)
 
@@ -224,13 +224,13 @@ if page == "Entrainement":
 # --- PAGE : MATCH ---
 elif page == "Match":
     st.subheader("⚽ Performances en match")
-    match_data = data[data["Task Name"] == "GAME"]
+    match_data = data[data["Type"] == "GAME"]
     st.dataframe(match_data, use_container_width=True)
 
 # --- PAGE : MINUTES DE JEU ---
 elif page == "Minutes de jeu":
     st.subheader("⏱️ Minutes de jeu")
-    game_data = data[data["Task Name"] == "GAME"].copy()
+    game_data = data[data["Type"] == "GAME"].copy()
     max_weekly = game_data.groupby("Semaine")["Duration"].max().sum()
     duration_data = (game_data.groupby("Name")["Duration"].sum()
                      .sort_values(ascending=False).reset_index())
@@ -245,7 +245,7 @@ elif page == "Minutes de jeu":
 elif page == "Best performance":
     st.subheader("🏅 Meilleures performances")
     perf_cols = ["m/min", "HSR/min", "SPR/min", "HSPR/min", "Vmax", "Amax", "Dmax"]
-    filtered = data[(data["Task Name"] == "GAME") & (data["Duration"] > 50)].copy()
+    filtered = data[(data["Type"] == "GAME") & (data["Duration"] > 50)].copy()
     for col in perf_cols:
         if col in filtered.columns:
             filtered[col] = pd.to_numeric(filtered[col].astype(str).str.replace(",", "."), errors="coerce")
@@ -267,7 +267,7 @@ elif page == "Player analysis":
     player_list = sorted(data["Name"].dropna().unique())
     selected = st.selectbox("Choisissez un joueur", player_list)
     player_df = data[data["Name"] == selected]
-    game_df = player_df[player_df["Task Name"] == "GAME"]
+    game_df = player_df[player_df["Type"] == "GAME"]
     if not game_df.empty:
         min_week = game_df["Semaine"].min()
         max_week = game_df["Semaine"].max()
@@ -278,7 +278,3 @@ elif page == "Player analysis":
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Pas de données de match pour ce joueur.")
-
-
-
-
