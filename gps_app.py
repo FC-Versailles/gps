@@ -231,9 +231,11 @@ if page == "Entrainement":
 
 # ── PAGE: MATCH ───────────────────────────────────────────────────────────────
 elif page == "Match":
+
+
     st.subheader("⚽ Performances en match")
 
-    # 1) GAME filter
+    # 1) Filter to GAME rows
     mask = (
         data["Type"]
             .fillna("")
@@ -243,11 +245,11 @@ elif page == "Match":
     )
     match_data = data[mask].copy()
 
-    # 2) Date → datetime
+    # 2) Ensure Date is datetime
     if not pd.api.types.is_datetime64_any_dtype(match_data["Date"]):
         match_data["Date"] = pd.to_datetime(match_data["Date"], errors="coerce")
 
-    # 3) Date picker
+    # 3) Build & apply date filter
     available_dates = sorted(match_data["Date"].dt.date.dropna().unique())
     selected_dates = st.multiselect(
         "Filtrer par date",
@@ -260,7 +262,7 @@ elif page == "Match":
     else:
         match_data = match_data.iloc[:0]
 
-    # 4) Columns and French‐format cleanup
+    # 4) Prepare & clean/cast French‐formatted numbers
     cols = [
         "Name", "Duration", "Distance", "m/min",
         "Distance 15km/h", "M/min 15km/h",
@@ -269,31 +271,27 @@ elif page == "Match":
         "Vmax", "Distance 90% Vmax"
     ]
     df = match_data.loc[:, cols].copy()
+    stat_cols = [c for c in cols if c != "Name"]
 
-    # 5) Clean & cast: all stats → Int64 except Vmax → float(1dp)
-    stat_cols = [c for c in cols if c not in ("Name",)]
     for c in stat_cols:
-        if c not in df.columns:
-            df[c] = pd.NA
-            continue
-
-        # strip spaces/thousands‐sep & swap comma→dot
-        cleaned = (
-            df[c]
-              .astype(str)
-              .str.replace(r"[^\d\-,\.]", "", regex=True)
-              .str.replace(",", ".", regex=False)
-              .replace("", pd.NA)
-        )
-        num = pd.to_numeric(cleaned, errors="coerce")
+        if c in df.columns:
+            cleaned = (
+                df[c]
+                  .astype(str)
+                  .str.replace(r"[^\d\-,\.]", "", regex=True)
+                  .str.replace(",", ".", regex=False)
+                  .replace("", pd.NA)
+            )
+            num = pd.to_numeric(cleaned, errors="coerce")
+        else:
+            num = pd.Series(pd.NA, index=df.index)
 
         if c == "Vmax":
             df[c] = num.round(1)
         else:
-            # integerize everything else
             df[c] = num.round(0).astype("Int64")
 
-    # 6) Render first table (scrollable HTML)
+    # 5) Render the first scrollable table
     html_table = df.to_html(index=False, classes="centered-table")
     row_h = 35
     total_h = max(300, len(df) * row_h)
@@ -306,8 +304,7 @@ elif page == "Match":
         }}
         .centered-table th {{ background:#f0f0f0; }}
       </style>
-    </head>
-    <body>
+    </head><body>
       <div style="max-height:{total_h}px;overflow-y:auto;">
         {html_table}
       </div>
@@ -316,20 +313,12 @@ elif page == "Match":
     components.html(html, height=total_h + 20, scrolling=True)
 
     # ── Référence Match ──
-
     match_df = data[mask].copy()
     if match_df.empty:
         st.info("Aucune donnée de match pour construire la référence.")
     else:
-        # same fields for reference
-        fields = [
-            "Duration", "Distance", "m/min", "Distance 15km/h", "M/min 15km/h",
-            "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
-            "N° Sprints", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-        ]
-
-        # 1) clean & convert match_df stats
-        for c in fields:
+        # clean & numeric-cast reference data
+        for c in stat_cols:
             if c in match_df.columns:
                 cleaned = (
                     match_df[c]
@@ -342,34 +331,30 @@ elif page == "Match":
             else:
                 match_df[c] = pd.NA
 
-        # 2) build per‐player records
+        # build per-player reference
         records = []
         for name, grp in match_df.groupby("Name"):
             rec = {"Name": name}
             full = grp[grp["Duration"] >= 90]
             if not full.empty:
-                # max of each stat
-                for c in fields:
+                for c in stat_cols:
                     rec[c] = full[c].max()
             else:
-                # scale partial
                 longest = grp.loc[grp["Duration"].idxmax()]
                 orig = longest["Duration"]
                 rec["Duration"] = orig
-                for c in fields:
+                for c in stat_cols:
                     if c == "Duration":
                         continue
                     val = longest[c]
-                    # only scale non‐Vmax fields
                     if c == "Vmax" or pd.isna(val) or orig <= 0:
                         rec[c] = val
                     else:
                         rec[c] = 90 * val / orig
             records.append(rec)
 
-        # 3) assemble DataFrame + cast
-        Refmatch = pd.DataFrame.from_records(records, columns=["Name"] + fields)
-        for c in fields:
+        Refmatch = pd.DataFrame.from_records(records, columns=["Name"] + stat_cols)
+        for c in stat_cols:
             if c == "Vmax":
                 Refmatch[c] = Refmatch[c].round(1)
             else:
@@ -377,98 +362,94 @@ elif page == "Match":
 
         st.subheader("🏆 Référence Match")
         st.dataframe(Refmatch, use_container_width=True)
-        
-        
-    # … after displaying Référence Match …
 
-    # ── Objectifs Match ──
-    # ── Objectifs Match ──
-    st.subheader("🎯 Objectifs Match")
-    
-    # 1) Let user set an objectif (0–100%)
-    objectif = st.slider(
-        "Objectif (%) relatif à votre référence personnelle",
-        min_value=0,
-        max_value=100,
-        value=100
-    )
-    
-    # 2) Start from the date‐filtered match DataFrame (`df`)
-    obj_df = df.copy()
-    
-    # 3) Compute each stat as % of that player’s personal Référence
-    ref_indexed = Refmatch.set_index("Name")
-    for col in fields:
-        pct_col = f"{col} %"
-        obj_df[pct_col] = obj_df.apply(
-            lambda row: (
-                round(row[col] / ref_indexed.at[row["Name"], col] * 100, 1)
-                if (
-                    row["Name"] in ref_indexed.index
-                    and pd.notna(ref_indexed.at[row["Name"], col])
-                    and ref_indexed.at[row["Name"], col] > 0
-                    and pd.notna(row[col])
-                )
-                else pd.NA
-            ),
-            axis=1
+        # ── Objectifs Match ──
+        st.subheader("🎯 Objectifs Match")
+
+        # 1) Only these 10 stats get objectifs
+        objective_fields = [
+            "Duration", "Distance",
+            "Distance 15km/h", "Distance 15-20km/h",
+            "Distance 20-25km/h", "Distance 25km/h",
+            "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+        ]
+
+        # 2) Sliders in 2×5 grid
+        row1, row2 = objective_fields[:5], objective_fields[5:]
+        objectives = {}
+        cols5 = st.columns(5)
+        for i, stat in enumerate(row1):
+            with cols5[i]:
+                objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
+        cols5 = st.columns(5)
+        for i, stat in enumerate(row2):
+            with cols5[i]:
+                objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
+
+        # 3) Compute % of personal reference for each match row
+        obj_df = df.copy()
+        ref_indexed = Refmatch.set_index("Name")
+        for c in objective_fields:
+            pct_vals = []
+            for _, row in obj_df.iterrows():
+                name = row["Name"]
+                ref = ref_indexed.at[name, c] if name in ref_indexed.index else pd.NA
+                val = row[c]
+                if pd.notna(val) and pd.notna(ref) and ref > 0:
+                    pct_vals.append(round(val / ref * 100, 1))
+                else:
+                    pct_vals.append(pd.NA)
+            obj_df[f"{c} %"] = pct_vals
+
+        # 4) Highlighting helper
+        def highlight_stat(val, obj):
+            if pd.isna(val):
+                return ""
+            diff = abs(val - obj)
+            if diff <= 5:
+                return "background-color: #c8e6c9;"
+            elif diff <= 10:
+                return "background-color: #fff9c4;"
+            elif diff <= 15:
+                return "background-color: #ffe0b2;"
+            elif diff <= 20:
+                return "background-color: #ffcdd2;"
+            else:
+                return ""
+
+        # 5) Build & render styled Objectifs table
+        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        styled = (
+            obj_df.loc[:, display_cols]
+                  .style
+                  .format({f"{c} %": "{:.1f} %" for c in objective_fields}, na_rep="—")
         )
-    
-    # 4) Highlight function with NA‐guard
-    def highlight_obj(val):
-        if pd.isna(val):
-            return ""
-        try:
-            diff = abs(float(val) - objectif)
-        except:
-            return ""
-        if diff <= 5:
-            return "background-color: #c8e6c9;"   # green
-        elif diff <= 10:
-            return "background-color: #fff9c4;"   # yellow
-        elif diff <= 15:
-            return "background-color: #ffe0b2;"   # orange
-        elif diff <= 20:
-            return "background-color: #ffcdd2;"   # red
-        else:
-            return ""
-    
-    # 5) Build display order: Name, each stat, then its % column
-    display_cols = ["Name"] + sum([[c, f"{c} %"] for c in fields], [])
-    
-    # 6) Create the styled table
-    styled_obj = (
-        obj_df.loc[:, display_cols]
-              .style
-              .format({f"{c} %": "{:.1f} %" for c in fields}, na_rep="—")
-              .applymap(highlight_obj, subset=[f"{c} %" for c in fields])
-              .set_table_attributes('class="centered-table"')
-    )
-    
-    # 7) Render it scrollable
-    html_table = styled_obj.to_html()
-    row_h = 35
-    total_h = max(300, len(obj_df) * row_h)
-    html = f"""
-    <html><head>
-      <style>
-        .centered-table {{ border-collapse:collapse; width:100%; }}
-        .centered-table th, .centered-table td {{
-          text-align:center; padding:4px 8px; border:1px solid #ddd;
-        }}
-        .centered-table th {{ background:#f0f0f0; }}
-      </style>
-    </head>
-    <body>
-      <div style="max-height:{total_h}px;overflow-y:auto;">
-        {html_table}
-      </div>
-    </body></html>
-    """
-    components.html(html, height=total_h + 20, scrolling=True)
+        for c in objective_fields:
+            styled = styled.applymap(
+                lambda v, obj=objectives[c]: highlight_stat(v, obj),
+                subset=[f"{c} %"]
+            )
+        styled = styled.set_table_attributes('class="centered-table"')
+        html_obj = styled.to_html()
+        total_h2 = total_h
+        html2 = f"""
+        <html><head>
+          <style>
+            .centered-table {{ border-collapse:collapse; width:100%; }}
+            .centered-table th, .centered-table td {{
+              text-align:center; padding:4px 8px; border:1px solid #ddd;
+            }}
+            .centered-table th {{ background:#f0f0f0; }}
+          </style>
+        </head><body>
+          <div style="max-height:{total_h2}px;overflow-y:auto;">
+            {html_obj}
+          </div>
+        </body></html>
+        """
+        components.html(html2, height=total_h2 + 20, scrolling=True)
 
-    
-    
+
 
 
 # ── PAGE: BEST PERFORMANCE ────────────────────────────────────────────────────
