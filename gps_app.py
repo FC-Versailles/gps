@@ -16,6 +16,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.styles import ParagraphStyle
 import requests
 
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 
@@ -297,11 +299,20 @@ if page == "Best performance":
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
 elif page == "Entrainement":
 
-
+# Try to import PDF libs
+    try:
+        from reportlab.lib.pagesizes import landscape, A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
+        from reportlab.lib import colors
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        PDF_ENABLED = True
+    except ImportError:
+        PDF_ENABLED = False
 
     st.subheader("🏋️ Performances à l'entraînement")
 
-    # ── 0) Build Référence Match for % comparisons ─────────────────────────────
+    # ── 0) Build Référence Match ─────────────────────────────────────────────────
     mask_match = data["Type"].fillna("").str.upper().str.strip() == "GAME"
     match_df_all = data[mask_match].copy()
     ref_fields = [
@@ -348,20 +359,13 @@ elif page == "Entrainement":
 
     # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
     st.markdown("### 🎯 Objectifs Entraînement")
-    allowed_tasks = [
-        "OPTI","MESO","DRILLS","COMPENSATION",
-        "MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"
-    ]
+    allowed_tasks = ["OPTI","MESO","DRILLS","COMPENSATION","MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
-    min_d = train_data["Date"].min().date()
-    max_d = train_data["Date"].max().date()
+    min_d, max_d = train_data["Date"].min().date(), train_data["Date"].max().date()
 
-    sel_date = st.date_input(
-        "Choisissez la date pour les objectifs",
-        value=min_d, min_value=min_d, max_value=max_d
-    )
-
+    sel_date = st.date_input("Choisissez la date pour les objectifs", value=min_d, min_value=min_d, max_value=max_d)
     date_df = train_data[train_data["Date"].dt.date == sel_date]
+
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
     else:
@@ -382,7 +386,7 @@ elif page == "Entrainement":
             with cont:
                 objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
 
-        # prepare & cast metrics
+        # prepare & cast
         df_ent = date_df[["Name"] + objective_fields].copy()
         for c in objective_fields:
             cleaned = (
@@ -399,10 +403,12 @@ elif page == "Entrainement":
         for c in objective_fields:
             df_ent[f"{c} %"] = df_ent.apply(
                 lambda r: round(r[c]/ref_idx.at[r["Name"],c]*100,1)
-                if (r["Name"] in ref_idx.index
+                if (
+                    r["Name"] in ref_idx.index
                     and pd.notna(r[c])
                     and pd.notna(ref_idx.at[r["Name"],c])
-                    and ref_idx.at[r["Name"],c]>0) else pd.NA,
+                    and ref_idx.at[r["Name"],c]>0
+                ) else pd.NA,
                 axis=1
             )
 
@@ -416,7 +422,7 @@ elif page == "Entrainement":
             if d<=20:   return "background-color:#ffcdd2;"
             return ""
 
-        # render Streamlit table (smaller text)
+        # render Streamlit table
         display = ["Name"] + sum([[c,f"{c} %"] for c in objective_fields], [])
         styled = (
             df_ent.loc[:, display]
@@ -426,7 +432,6 @@ elif page == "Entrainement":
                       **{"Vmax": "{:.1f}"},
                       **{f"{c} %": "{:.1f} %" for c in objective_fields}
                   })
-                  .applymap(lambda v,obj=0: "", subset=display)  # placeholder
         )
         for c in objective_fields:
             styled = styled.applymap(lambda v,obj=objectives[c]: hl(v,obj), subset=[f"{c} %"])
@@ -449,37 +454,53 @@ elif page == "Entrainement":
         """
         components.html(wrapper, height=400, scrolling=True)
 
-        # PDF export
-        if st.button("📥 Exporter en PDF"):
+        # ── PDF export ────────────────────────────────────────────────────────
+        if PDF_ENABLED and st.button("📥 Exporter en PDF"):
+            # fetch logo
             logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
             resp = requests.get(logo_url)
             logo_img = Image(io.BytesIO(resp.content), width=40, height=40)
 
+            # setup PDF
             buffer = io.BytesIO()
             doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
                                     rightMargin=10,leftMargin=10,topMargin=30,bottomMargin=10)
             styles = getSampleStyleSheet()
-            small = styles["Normal"]
-            small.fontSize = 8; small.leading = 10
+            hdr_style = ParagraphStyle("hdr", parent=styles["Normal"], fontSize=8, leading=10)
             elems = []
 
-            hdr_data = [[
-                Paragraph("<b>Type : Entraînement</b>", small),
-                Paragraph(f"<b>Date : {sel_date.strftime('%d.%m.%Y')}</b>", small),
-                logo_img
-            ]]
-            hdr = Table(hdr_data, colWidths=[doc.width/3]*3)
+            # header row with split text
+            hdr_cells = []
+            for title in ["Type : Entraînement", f"Date : {sel_date.strftime('%d.%m.%Y')}", ""]:
+                if title.startswith("Type"):
+                    txt = title.replace(" ", "<br/>",1)
+                elif title.startswith("Date"):
+                    txt = title.replace(" ", "<br/>",1)
+                else:
+                    txt = ""
+                hdr_cells.append(Paragraph(f"<b>{txt}</b>", hdr_style) if txt else logo_img)
+            hdr = Table([hdr_cells], colWidths=[doc.width/3]*3)
             hdr.setStyle(TableStyle([
-                ("FONTSIZE",(0,0),(-1,-1),8),
                 ("ALIGN",(0,0),(0,0),"LEFT"),
                 ("ALIGN",(1,0),(1,0),"CENTER"),
                 ("ALIGN",(2,0),(2,0),"RIGHT"),
-                ("BOTTOMPADDING",(0,0),(-1,-1),6)
+                ("FONTSIZE",(0,0),(-1,-1),8),
+                ("BOTTOMPADDING",(0,0),(-1,-1),6),
             ]))
             elems.append(hdr); elems.append(Spacer(1,6))
 
-            data_table = [display] + df_ent[display].astype(str).values.tolist()
-            tbl = Table(data_table, repeatRows=1,
+            # prepare table data with header as Paragraphs
+            table_data = []
+            header_row = []
+            for col in display:
+                parts = col.split(" ",1)
+                text = parts[0] + ("<br/>"+parts[1] if len(parts)>1 else "")
+                header_row.append(Paragraph(f"<b>{text}</b>", hdr_style))
+            table_data.append(header_row)
+            for _, row in df_ent[display].astype(str).iterrows():
+                table_data.append(list(row))
+
+            tbl = Table(table_data, repeatRows=1,
                         colWidths=[doc.width/len(display)]*len(display))
             cmds = [
                 ("GRID",(0,0),(-1,-1),0.3,colors.grey),
@@ -487,19 +508,21 @@ elif page == "Entrainement":
                 ("FONTSIZE",(0,0),(-1,-1),6),
                 ("ALIGN",(0,0),(-1,-1),"CENTER")
             ]
-            for r_idx,row in enumerate(data_table[1:],start=1):
-                for c_idx,cell in enumerate(row):
-                    coln=display[c_idx]
+            for ridx, row in enumerate(table_data[1:], start=1):
+                for cidx, cell in enumerate(row):
+                    coln = display[cidx]
                     if coln.endswith(" %") and cell not in ("","nan"):
                         try:
-                            val=float(cell.replace("%","")); diff=abs(val-objectives[coln[:-2]])
-                        except: continue
-                        if diff<=5: bg=HexColor("#c8e6c9")
-                        elif diff<=10: bg=HexColor("#fff9c4")
-                        elif diff<=15: bg=HexColor("#ffe0b2")
-                        elif diff<=20: bg=HexColor("#ffcdd2")
+                            val = float(cell.replace("%",""))
+                            diff = abs(val - objectives[coln[:-2]])
+                        except:
+                            continue
+                        if diff<=5:  bg=HexColor("#c8e6c9")
+                        elif diff<=10:bg=HexColor("#fff9c4")
+                        elif diff<=15:bg=HexColor("#ffe0b2")
+                        elif diff<=20:bg=HexColor("#ffcdd2")
                         else: continue
-                        cmds.append(("BACKGROUND",(c_idx,r_idx),(c_idx,r_idx),bg))
+                        cmds.append(("BACKGROUND",(cidx,ridx),(cidx,ridx),bg))
             tbl.setStyle(TableStyle(cmds))
             elems.append(tbl)
 
