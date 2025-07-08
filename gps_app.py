@@ -7,6 +7,14 @@ import streamlit.components.v1 as components
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
+import io
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.colors import HexColor
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
+import requests
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -288,10 +296,8 @@ if page == "Best performance":
 
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
 elif page == "Entrainement":
-    import streamlit as st
-    import pandas as pd
-    import plotly.express as px
-    import streamlit.components.v1 as components
+
+
 
     st.subheader("🏋️ Performances à l'entraînement")
 
@@ -303,7 +309,6 @@ elif page == "Entrainement":
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "N° Sprints","Acc","Dec","Vmax","Distance 90% Vmax"
     ]
-    # clean + numeric‐cast
     for c in ref_fields:
         if c in match_df_all:
             cleaned = (
@@ -316,7 +321,6 @@ elif page == "Entrainement":
         else:
             match_df_all[c] = pd.NA
 
-    # aggregate personal bests
     records = []
     for name, grp in match_df_all.groupby("Name"):
         rec = {"Name": name}
@@ -344,7 +348,6 @@ elif page == "Entrainement":
 
     # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
     st.markdown("### 🎯 Objectifs Entraînement")
-
     allowed_tasks = [
         "OPTI","MESO","DRILLS","COMPENSATION",
         "MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"
@@ -353,27 +356,20 @@ elif page == "Entrainement":
     min_d = train_data["Date"].min().date()
     max_d = train_data["Date"].max().date()
 
-    # single-date picker
     sel_date = st.date_input(
         "Choisissez la date pour les objectifs",
-        value=min_d,
-        min_value=min_d,
-        max_value=max_d
+        value=min_d, min_value=min_d, max_value=max_d
     )
 
     date_df = train_data[train_data["Date"].dt.date == sel_date]
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
     else:
-        # same 10 objective stats
         objective_fields = [
-            "Duration", "Distance",
-            "Distance 15km/h", "Distance 15-20km/h",
-            "Distance 20-25km/h", "Distance 25km/h",
-            "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+            "Duration","Distance","Distance 15km/h","Distance 15-20km/h",
+            "Distance 20-25km/h","Distance 25km/h","Acc","Dec","Vmax","Distance 90% Vmax"
         ]
 
-        # 2×5 sliders
         st.markdown(f"#### Objectifs du {sel_date}")
         objectives = {}
         row1, row2 = objective_fields[:5], objective_fields[5:]
@@ -386,7 +382,7 @@ elif page == "Entrainement":
             with cont:
                 objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
 
-        # prepare metrics
+        # prepare & cast metrics
         df_ent = date_df[["Name"] + objective_fields].copy()
         for c in objective_fields:
             cleaned = (
@@ -398,73 +394,124 @@ elif page == "Entrainement":
             num = pd.to_numeric(cleaned, errors="coerce")
             df_ent[c] = num.round(1) if c=="Vmax" else num.round(0).astype("Int64")
 
-        # compute % vs Référence Match
+        # compute % vs Refmatch
         ref_idx = Refmatch.set_index("Name")
         for c in objective_fields:
             df_ent[f"{c} %"] = df_ent.apply(
                 lambda r: round(r[c]/ref_idx.at[r["Name"],c]*100,1)
-                if (
-                    r["Name"] in ref_idx.index
+                if (r["Name"] in ref_idx.index
                     and pd.notna(r[c])
                     and pd.notna(ref_idx.at[r["Name"],c])
-                    and ref_idx.at[r["Name"],c]>0
-                ) else pd.NA,
+                    and ref_idx.at[r["Name"],c]>0) else pd.NA,
                 axis=1
             )
 
-        # styling
+        # highlight helper
         def hl(v,obj):
             if pd.isna(v): return ""
             d = abs(v-obj)
-            if d<=5:   return "background-color:#c8e6c9;"
-            if d<=10:  return "background-color:#fff9c4;"
-            if d<=15:  return "background-color:#ffe0b2;"
-            if d<=20:  return "background-color:#ffcdd2;"
+            if d<=5:    return "background-color:#c8e6c9;"
+            if d<=10:   return "background-color:#fff9c4;"
+            if d<=15:   return "background-color:#ffe0b2;"
+            if d<=20:   return "background-color:#ffcdd2;"
             return ""
 
-            # Build & style the Objectifs table
-        display = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        # render Streamlit table (smaller text)
+        display = ["Name"] + sum([[c,f"{c} %"] for c in objective_fields], [])
         styled = (
             df_ent.loc[:, display]
                   .style
-                  .format(
-                      {
-                        # raw stats → integer (0 decimal)
-                        **{c: "{:.0f}" for c in objective_fields if c != "Vmax"},
-                        # Vmax → one decimal
-                        **{"Vmax": "{:.1f}"},
-                        # percent columns → one decimal + percent sign
-                        **{f"{c} %": "{:.1f} %" for c in objective_fields}
-                      }
-                  )
+                  .format({
+                      **{c: "{:.0f}" for c in objective_fields if c!="Vmax"},
+                      **{"Vmax": "{:.1f}"},
+                      **{f"{c} %": "{:.1f} %" for c in objective_fields}
+                  })
+                  .applymap(lambda v,obj=0: "", subset=display)  # placeholder
         )
-    
-        # apply your highlight function as before
         for c in objective_fields:
-            styled = styled.applymap(
-                lambda v, obj=objectives[c]: hl(v, obj),
-                subset=[f"{c} %"]
-            )
-    
+            styled = styled.applymap(lambda v,obj=objectives[c]: hl(v,obj), subset=[f"{c} %"])
         styled = styled.set_table_attributes('class="centered-table"')
         html_obj = styled.to_html()
-        total_h = max(300, len(df_ent) * 35)
         wrapper = f"""
         <html><head>
           <style>
-            .centered-table {{border-collapse:collapse;width:100%;}}
+            .centered-table {{font-size:10px; border-collapse:collapse; width:100%;}}
             .centered-table th, .centered-table td {{
-              text-align:center; padding:4px 8px; border:1px solid #ddd;
+              text-align:center; padding:2px 4px; border:1px solid #ddd;
             }}
             .centered-table th {{background:#f0f0f0;}}
           </style>
         </head><body>
-          <div style="max-height:{total_h}px;overflow-y:auto;">
+          <div style="max-height:{max(300,len(df_ent)*30)}px;overflow-y:auto;">
             {html_obj}
           </div>
         </body></html>
         """
-        components.html(wrapper, height=total_h + 20, scrolling=True)
+        components.html(wrapper, height=400, scrolling=True)
+
+        # PDF export
+        if st.button("📥 Exporter en PDF"):
+            logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
+            resp = requests.get(logo_url)
+            logo_img = Image(io.BytesIO(resp.content), width=40, height=40)
+
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
+                                    rightMargin=10,leftMargin=10,topMargin=30,bottomMargin=10)
+            styles = getSampleStyleSheet()
+            small = styles["Normal"]
+            small.fontSize = 8; small.leading = 10
+            elems = []
+
+            hdr_data = [[
+                Paragraph("<b>Type : Entraînement</b>", small),
+                Paragraph(f"<b>Date : {sel_date.strftime('%d.%m.%Y')}</b>", small),
+                logo_img
+            ]]
+            hdr = Table(hdr_data, colWidths=[doc.width/3]*3)
+            hdr.setStyle(TableStyle([
+                ("FONTSIZE",(0,0),(-1,-1),8),
+                ("ALIGN",(0,0),(0,0),"LEFT"),
+                ("ALIGN",(1,0),(1,0),"CENTER"),
+                ("ALIGN",(2,0),(2,0),"RIGHT"),
+                ("BOTTOMPADDING",(0,0),(-1,-1),6)
+            ]))
+            elems.append(hdr); elems.append(Spacer(1,6))
+
+            data_table = [display] + df_ent[display].astype(str).values.tolist()
+            tbl = Table(data_table, repeatRows=1,
+                        colWidths=[doc.width/len(display)]*len(display))
+            cmds = [
+                ("GRID",(0,0),(-1,-1),0.3,colors.grey),
+                ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
+                ("FONTSIZE",(0,0),(-1,-1),6),
+                ("ALIGN",(0,0),(-1,-1),"CENTER")
+            ]
+            for r_idx,row in enumerate(data_table[1:],start=1):
+                for c_idx,cell in enumerate(row):
+                    coln=display[c_idx]
+                    if coln.endswith(" %") and cell not in ("","nan"):
+                        try:
+                            val=float(cell.replace("%","")); diff=abs(val-objectives[coln[:-2]])
+                        except: continue
+                        if diff<=5: bg=HexColor("#c8e6c9")
+                        elif diff<=10: bg=HexColor("#fff9c4")
+                        elif diff<=15: bg=HexColor("#ffe0b2")
+                        elif diff<=20: bg=HexColor("#ffcdd2")
+                        else: continue
+                        cmds.append(("BACKGROUND",(c_idx,r_idx),(c_idx,r_idx),bg))
+            tbl.setStyle(TableStyle(cmds))
+            elems.append(tbl)
+
+            doc.build(elems)
+            pdf_bytes = buffer.getvalue()
+            st.download_button(
+                "Télécharger le PDF",
+                data=pdf_bytes,
+                file_name=f"ObjEntrain_{sel_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf"
+            )
+
 
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
     st.markdown("---")
