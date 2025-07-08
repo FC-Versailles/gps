@@ -422,21 +422,34 @@ elif page == "Entrainement":
             if d<=20:   return "background-color:#ffcdd2;"
             return ""
 
-        # render Streamlit table
-        display = ["Name"] + sum([[c,f"{c} %"] for c in objective_fields], [])
+        # 1) Pick columns
+        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+    
+        # 2) Build Styler
         styled = (
-            df_ent.loc[:, display]
+            df_ent.loc[:, display_cols]
                   .style
                   .format({
                       **{c: "{:.0f}" for c in objective_fields if c!="Vmax"},
                       **{"Vmax": "{:.1f}"},
-                      **{f"{c} %": "{:.1f} %" for c in objective_fields}
+                      **{f"{c} %":"{:.1f} %" for c in objective_fields}
                   })
         )
-        for c in objective_fields:
-            styled = styled.applymap(lambda v,obj=objectives[c]: hl(v,obj), subset=[f"{c} %"])
+        for stat in objective_fields:
+            styled = styled.applymap(
+                lambda v, obj=objectives[stat]: hl(v, obj),
+                subset=[f"{stat} %"]
+            )
         styled = styled.set_table_attributes('class="centered-table"')
+    
+        # 3) Get HTML
         html_obj = styled.to_html()
+    
+        # 4) Strip every header ending in "%" down to "<th>%</th>"
+        import re
+        html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', html_obj)
+    
+        # 5) Wrap & render with your CSS
         wrapper = f"""
         <html><head>
           <style>
@@ -447,93 +460,116 @@ elif page == "Entrainement":
             .centered-table th {{background:#f0f0f0;}}
           </style>
         </head><body>
-          <div style="max-height:{max(300,len(df_ent)*30)}px;overflow-y:auto;">
+          <div style="max-height:{max(300, len(df_ent)*30)}px;overflow-y:auto;">
             {html_obj}
           </div>
         </body></html>
         """
         components.html(wrapper, height=400, scrolling=True)
 
-        # ── PDF export ────────────────────────────────────────────────────────
-        if PDF_ENABLED and st.button("📥 Exporter en PDF"):
-            # fetch logo
-            logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
-            resp = requests.get(logo_url)
-            logo_img = Image(io.BytesIO(resp.content), width=40, height=40)
+# ── PDF export ────────────────────────────────────────────────────────
+    if PDF_ENABLED and st.button("📥 Exporter en PDF"):
 
-            # setup PDF
-            buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
-                                    rightMargin=10,leftMargin=10,topMargin=30,bottomMargin=10)
-            styles = getSampleStyleSheet()
-            hdr_style = ParagraphStyle("hdr", parent=styles["Normal"], fontSize=8, leading=10)
-            elems = []
+    
+        # 1) Fetch logo
+        logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
+        resp = requests.get(logo_url)
+        logo_img = Image(io.BytesIO(resp.content), width=40, height=40)
+    
+        # 2) Setup PDF document (landscape)
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=landscape(A4),
+            rightMargin=10, leftMargin=10, topMargin=30, bottomMargin=10
+        )
+        styles = getSampleStyleSheet()
+        hdr_style = ParagraphStyle("hdr", parent=styles["Normal"], fontSize=6, leading=7)
+        elems = []
+    
+        # 3) Header row: Type | Date | Logo
+        hdr_cells = [
+            Paragraph("Type<br/>: Entraînement", hdr_style),
+            Paragraph(f"Date<br/>{sel_date.strftime('%d.%m.%Y')}", hdr_style),
+            logo_img
+        ]
+        hdr = Table([hdr_cells], colWidths=[doc.width/3]*3)
+        hdr.setStyle(TableStyle([
+            ("ALIGN",(0,0),(0,0),"LEFT"),
+            ("ALIGN",(1,0),(1,0),"CENTER"),
+            ("ALIGN",(2,0),(2,0),"RIGHT"),
+            ("FONTSIZE",(0,0),(-1,-1),6),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ]))
+        elems.append(hdr)
+        elems.append(Spacer(1, 4))
+    
+        # 4) Build table data
+        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        table_data = []
+        # Header row with wrap for "%" only
+        header_row = []
+        for col in display_cols:
+            if col.endswith(" %"):
+                header_row.append(Paragraph("<b>%</b>", hdr_style))
+            else:
+                header_row.append(Paragraph(f"<b>{col}</b>", hdr_style))
+        table_data.append(header_row)
+        # Data rows
+        for _, row in df_ent[display_cols].iterrows():
+            table_data.append([str(row[col]) for col in display_cols])
+    
+        # 5) Compute column widths: Name=3, each stat=3, each "%"=1
+        ratios = [3] + sum([[3,1] for _ in objective_fields], [])
+        total = sum(ratios)
+        colWidths = [doc.width * r / total for r in ratios]
+    
+        # 6) Create table
+        tbl = Table(table_data, repeatRows=1, colWidths=colWidths)
+    
+        # 7) Style table
+        cmds = [
+            ("GRID",       (0,0), (-1,-1), 0.3, colors.grey),
+            ("BACKGROUND",(0,0),  (-1,0),   colors.lightgrey),
+            ("FONTSIZE",  (0,0),  (-1,0),   6),  # header
+            ("FONTSIZE",  (0,1),  (-1,-1),   5),  # body
+            ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ]
+        for ridx, row in enumerate(table_data[1:], start=1):
+            for cidx, cell in enumerate(row):
+                if display_cols[cidx].endswith(" %"):
+                    try:
+                        val = float(cell.replace("%",""))
+                        stat = objective_fields[cidx//2]
+                        diff = abs(val - objectives[stat])
+                    except:
+                        continue
+                    if diff <= 5:
+                        bg = HexColor("#c8e6c9")
+                    elif diff <= 10:
+                        bg = HexColor("#fff9c4")
+                    elif diff <= 15:
+                        bg = HexColor("#ffe0b2")
+                    elif diff <= 20:
+                        bg = HexColor("#ffcdd2")
+                    else:
+                        continue
+                    cmds.append(("BACKGROUND", (cidx, ridx), (cidx, ridx), bg))
+    
+        tbl.setStyle(TableStyle(cmds))
+        elems.append(tbl)
+    
+        # 8) Build PDF and offer download
+        doc.build(elems)
+        pdf_bytes = buffer.getvalue()
+        st.download_button(
+            "Télécharger le PDF",
+            data=pdf_bytes,
+            file_name=f"ObjEntrain_{sel_date.strftime('%Y%m%d')}.pdf",
+            mime="application/pdf"
+        )
 
-            # header row with split text
-            hdr_cells = []
-            for title in ["Type : Entraînement", f"Date : {sel_date.strftime('%d.%m.%Y')}", ""]:
-                if title.startswith("Type"):
-                    txt = title.replace(" ", "<br/>",1)
-                elif title.startswith("Date"):
-                    txt = title.replace(" ", "<br/>",1)
-                else:
-                    txt = ""
-                hdr_cells.append(Paragraph(f"<b>{txt}</b>", hdr_style) if txt else logo_img)
-            hdr = Table([hdr_cells], colWidths=[doc.width/3]*3)
-            hdr.setStyle(TableStyle([
-                ("ALIGN",(0,0),(0,0),"LEFT"),
-                ("ALIGN",(1,0),(1,0),"CENTER"),
-                ("ALIGN",(2,0),(2,0),"RIGHT"),
-                ("FONTSIZE",(0,0),(-1,-1),8),
-                ("BOTTOMPADDING",(0,0),(-1,-1),6),
-            ]))
-            elems.append(hdr); elems.append(Spacer(1,6))
 
-            # prepare table data with header as Paragraphs
-            table_data = []
-            header_row = []
-            for col in display:
-                parts = col.split(" ",1)
-                text = parts[0] + ("<br/>"+parts[1] if len(parts)>1 else "")
-                header_row.append(Paragraph(f"<b>{text}</b>", hdr_style))
-            table_data.append(header_row)
-            for _, row in df_ent[display].astype(str).iterrows():
-                table_data.append(list(row))
-
-            tbl = Table(table_data, repeatRows=1,
-                        colWidths=[doc.width/len(display)]*len(display))
-            cmds = [
-                ("GRID",(0,0),(-1,-1),0.3,colors.grey),
-                ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
-                ("FONTSIZE",(0,0),(-1,-1),6),
-                ("ALIGN",(0,0),(-1,-1),"CENTER")
-            ]
-            for ridx, row in enumerate(table_data[1:], start=1):
-                for cidx, cell in enumerate(row):
-                    coln = display[cidx]
-                    if coln.endswith(" %") and cell not in ("","nan"):
-                        try:
-                            val = float(cell.replace("%",""))
-                            diff = abs(val - objectives[coln[:-2]])
-                        except:
-                            continue
-                        if diff<=5:  bg=HexColor("#c8e6c9")
-                        elif diff<=10:bg=HexColor("#fff9c4")
-                        elif diff<=15:bg=HexColor("#ffe0b2")
-                        elif diff<=20:bg=HexColor("#ffcdd2")
-                        else: continue
-                        cmds.append(("BACKGROUND",(cidx,ridx),(cidx,ridx),bg))
-            tbl.setStyle(TableStyle(cmds))
-            elems.append(tbl)
-
-            doc.build(elems)
-            pdf_bytes = buffer.getvalue()
-            st.download_button(
-                "Télécharger le PDF",
-                data=pdf_bytes,
-                file_name=f"ObjEntrain_{sel_date.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf"
-            )
 
 
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
