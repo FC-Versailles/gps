@@ -520,8 +520,8 @@ elif page == "Entrainement":
           <head>
             <style>
               .centered-table{{border-collapse:collapse;width:100%;}}
-              .centered-table th {{font-size:14px; padding:6px 8px; text-align:center;}}
-              .centered-table td {{font-size:12px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
+              .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
+              .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
               .centered-table th, .centered-table td {{border:1px solid #ddd;}}
               .centered-table th{{background-color:#0031E3;color:white;}}
             </style>
