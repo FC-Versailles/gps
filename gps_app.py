@@ -153,6 +153,30 @@ if "Semaine" in data.columns:
 # Date → datetime
 if "Date" in data.columns:
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    
+player_positions = {
+    "ADEHOUNI":   "PIS",
+    "BEN BRAHIM": "ATT",
+    "BENHADDOUD": "M",
+    "CALVET":     "DC",
+    "CHADET":     "PIS",
+    "CISSE":      "DC",
+    "DOUCOURE":   "ATT",
+    "FISCHER":    "PIS",
+    "GAVAL":      "ATT",
+    "GUILLAUME":  "ATT",
+    "KALAI":      "ATT",
+    "MBONE":      "DC",
+    "MOUSSADEK":  "DC",
+    "OUCHEN":     "M",
+    "RENAUD":     "M",
+    "SANTINI":    "PIS",
+    "TCHATO":     "PIS",
+    "ZEMOURA":    "ATT",
+    "BASQUE":     "M",
+    "KOUASSI":    "M",
+    "ODZOUMO":    "ATT"
+}
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
 pages = ["Entrainement","Match","Best performance","Player analysis","Minutes de jeu"]
@@ -297,9 +321,10 @@ if page == "Best performance":
 
 
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
+
 elif page == "Entrainement":
 
-# Try to import PDF libs
+    # ── Try to import PDF libs ───────────────────────────────────────────────
     try:
         from reportlab.lib.pagesizes import landscape, A4
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
@@ -312,7 +337,7 @@ elif page == "Entrainement":
 
     st.subheader("🏋️ Performances à l'entraînement")
 
-    # ── 0) Build Référence Match ─────────────────────────────────────────────────
+    # ── 0) Build Référence Match ──────────────────────────────────────────────
     mask_match = data["Type"].fillna("").str.upper().str.strip() == "GAME"
     match_df_all = data[mask_match].copy()
     ref_fields = [
@@ -363,7 +388,12 @@ elif page == "Entrainement":
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     min_d, max_d = train_data["Date"].min().date(), train_data["Date"].max().date()
 
-    sel_date = st.date_input("Choisissez la date pour les objectifs", value=min_d, min_value=min_d, max_value=max_d)
+    sel_date = st.date_input(
+        "Choisissez la date pour les objectifs",
+        value=max_d,
+        min_value=min_d,
+        max_value=max_d
+    )
     date_df = train_data[train_data["Date"].dt.date == sel_date]
 
     if date_df.empty:
@@ -376,6 +406,7 @@ elif page == "Entrainement":
 
         st.markdown(f"#### Objectifs du {sel_date}")
         objectives = {}
+        # sliders in two rows
         row1, row2 = objective_fields[:5], objective_fields[5:]
         cols5 = st.columns(5)
         for cont, stat in zip(cols5, row1):
@@ -386,7 +417,7 @@ elif page == "Entrainement":
             with cont:
                 objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
 
-        # prepare & cast
+        # prepare raw data
         df_ent = date_df[["Name"] + objective_fields].copy()
         for c in objective_fields:
             cleaned = (
@@ -396,178 +427,139 @@ elif page == "Entrainement":
                          .replace("", pd.NA)
             )
             num = pd.to_numeric(cleaned, errors="coerce")
-            df_ent[c] = num.round(1) if c=="Vmax" else num.round(0).astype("Int64")
+            df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
 
-        # compute % vs Refmatch
+        # percent vs reference
         ref_idx = Refmatch.set_index("Name")
         for c in objective_fields:
             df_ent[f"{c} %"] = df_ent.apply(
-                lambda r: round(r[c]/ref_idx.at[r["Name"],c]*100,1)
+                lambda r: round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
                 if (
                     r["Name"] in ref_idx.index
                     and pd.notna(r[c])
-                    and pd.notna(ref_idx.at[r["Name"],c])
-                    and ref_idx.at[r["Name"],c]>0
-                ) else pd.NA,
+                    and pd.notna(ref_idx.at[r["Name"], c])
+                    and ref_idx.at[r["Name"], c] > 0
+                )
+                else pd.NA,
                 axis=1
             )
 
-        # highlight helper
-        def hl(v,obj):
-            if pd.isna(v): return ""
-            d = abs(v-obj)
-            if d<=5:    return "background-color:#c8e6c9;"
-            if d<=10:   return "background-color:#fff9c4;"
-            if d<=15:   return "background-color:#ffe0b2;"
-            if d<=20:   return "background-color:#ffcdd2;"
-            return ""
+        # add overall mean
+        mean_data = {"Name": "Moyenne"}
+        for c in objective_fields:
+            raw_mean = df_ent[c].mean(skipna=True)
+            mean_data[c] = round(raw_mean, 1) if c == "Vmax" else int(round(raw_mean, 0))
+            pct_mean = df_ent[f"{c} %"].mean(skipna=True)
+            mean_data[f"{c} %"] = round(pct_mean, 1)
+        df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
 
-        # 1) Pick columns
-        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
-    
-        # 2) Build Styler
-        styled = (
-            df_ent.loc[:, display_cols]
-                  .style
-                  .format({
-                      **{c: "{:.0f}" for c in objective_fields if c!="Vmax"},
-                      **{"Vmax": "{:.1f}"},
-                      **{f"{c} %":"{:.1f} %" for c in objective_fields}
-                  })
-        )
+                # add position column for display (normalize to uppercase keys)
+        df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
+
+        # separate mean
+        overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
+        players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()[df_ent["Name"] != "Moyenne"].copy()
+
+        # define and group by position order
+        pos_order = ["ATT","DC","M","PIS","PIST"]
+        grouped = []
+        for pos in pos_order:
+            grp = players_only[players_only["Pos"] == pos].sort_values("Name")
+            if grp.empty:
+                continue
+            grouped.append(grp)
+            # mean per position
+            mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
+            for c in objective_fields:
+                vals = grp[c]
+                mean_vals[c] = round(vals.mean(skipna=True),1) if c == "Vmax" else int(round(vals.mean(skipna=True),0))
+                mean_vals[f"{c} %"] = round(grp[f"{c} %"].mean(skipna=True),1)
+            grouped.append(pd.DataFrame([mean_vals]))
+        others = players_only[~players_only["Pos"].isin(pos_order)].sort_values("Name")
+        if not others.empty:
+            grouped.append(others)
+        grouped.append(overall_mean)
+        df_sorted = pd.concat(grouped, ignore_index=True)
+
+                # blank Pos for Moyenne rows
+        df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
+
+                # blank Pos for Moyenne rows
+        df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
+
+        # build styler: include Pos and styling
+        display_cols = ["Name","Pos"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        df_display = df_sorted.loc[:, display_cols]
+
+        # 1) alternate row colors for clarity
+        def alternate_colors(row):
+            if row['Name'].startswith('Moyenne'):
+                return [''] * len(display_cols)
+            # even index -> gray, odd -> white
+            color = '#EDE8E8' if row.name % 2 == 0 else 'white'
+            return [f'background-color:{color}'] * len(display_cols)
+
+        # 2) highlight Moyenne rows in gold
+        def highlight_moyenne(row):
+            if row['Name'].startswith('Moyenne'):
+                return ['background-color:#CFB013'] * len(display_cols)
+            return [''] * len(display_cols)
+
+        styled = df_display.style
+        # apply alternate colors first
+        styled = styled.apply(alternate_colors, axis=1)
+        # then override Moyenne rows
+        styled = styled.apply(highlight_moyenne, axis=1)
+
+        # formatting numbers
+        styled = styled.format({**{c:'{:.0f}' for c in objective_fields if c!='Vmax'}, **{'Vmax':'{:.1f}'}, **{f"{c} %":"{:.1f} %" for c in objective_fields}})
+
+        # highlight % columns against objectives
+        def hl(v, obj):
+            if pd.isna(v): return ""
+            d = abs(v - obj)
+            if d <= 5: return "background-color:#c8e6c9;"
+            if d <= 10: return "background-color:#fff9c4;"
+            if d <= 15: return "background-color:#ffe0b2;"
+            if d <= 20: return "background-color:#ffcdd2;"
+            return ""
         for stat in objective_fields:
-            styled = styled.applymap(
-                lambda v, obj=objectives[stat]: hl(v, obj),
-                subset=[f"{stat} %"]
-            )
+            styled = styled.applymap(lambda v, obj=objectives[stat]: hl(v,obj), subset=[f"{stat} %"])
+
+        # hide index via CSS and style header
+        styled = styled.set_table_styles([
+            {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white')]},
+            {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
+            {'selector': 'th.blank', 'props': 'display:none;'}
+        ], overwrite=False)
         styled = styled.set_table_attributes('class="centered-table"')
-    
-        # 3) Get HTML
-        html_obj = styled.to_html()
-    
-        # 4) Strip every header ending in "%" down to "<th>%</th>"
+
+        # render HTML
         import re
-        html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', html_obj)
-    
-        # 5) Wrap & render with your CSS
+        html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
+        # update wrapper header color and maintain cell styling
         wrapper = f"""
-        <html><head>
-          <style>
-            .centered-table {{font-size:10px; border-collapse:collapse; width:100%;}}
-            .centered-table th, .centered-table td {{
-              text-align:center; padding:2px 4px; border:1px solid #ddd;
-            }}
-            .centered-table th {{background:#f0f0f0;}}
-          </style>
-        </head><body>
-          <div style="max-height:{max(300, len(df_ent)*30)}px;overflow-y:auto;">
-            {html_obj}
-          </div>
+        <html><head><style>
+        .centered-table{{font-size:10px;border-collapse:collapse;width:100%;}}
+        .centered-table th, .centered-table td{{text-align:center;padding:2px 4px;border:1px solid #ddd;}}
+        .centered-table th{{background-color:#0031E3;color:white;}}
+        </style></head><body>
+        <div style=\"max-height:{max(300,len(df_sorted)*30)}px;overflow-y:auto;\">{html_obj}</div>
         </body></html>
         """
         components.html(wrapper, height=400, scrolling=True)
 
-# ── PDF export ────────────────────────────────────────────────────────
-    if PDF_ENABLED and st.button("📥 Exporter en PDF"):
 
-    
-        # 1) Fetch logo
+    # ── PDF export ─────────────────────────────────────────────────────────────
+    if PDF_ENABLED and st.button("📥 Exporter en PDF"):
+        import io, requests
+        from reportlab.lib.pagesizes import landscape, A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
+        from reportlab.lib import colors
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
         logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
-        resp = requests.get(logo_url)
-        logo_img = Image(io.BytesIO(resp.content), width=40, height=40)
-    
-        # 2) Setup PDF document (landscape)
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=landscape(A4),
-            rightMargin=10, leftMargin=10, topMargin=30, bottomMargin=10
-        )
-        styles = getSampleStyleSheet()
-        hdr_style = ParagraphStyle("hdr", parent=styles["Normal"], fontSize=6, leading=7)
-        elems = []
-    
-        # 3) Header row: Type | Date | Logo
-        hdr_cells = [
-            Paragraph("Type<br/>: Entraînement", hdr_style),
-            Paragraph(f"Date<br/>{sel_date.strftime('%d.%m.%Y')}", hdr_style),
-            logo_img
-        ]
-        hdr = Table([hdr_cells], colWidths=[doc.width/3]*3)
-        hdr.setStyle(TableStyle([
-            ("ALIGN",(0,0),(0,0),"LEFT"),
-            ("ALIGN",(1,0),(1,0),"CENTER"),
-            ("ALIGN",(2,0),(2,0),"RIGHT"),
-            ("FONTSIZE",(0,0),(-1,-1),6),
-            ("BOTTOMPADDING",(0,0),(-1,-1),4),
-        ]))
-        elems.append(hdr)
-        elems.append(Spacer(1, 4))
-    
-        # 4) Build table data
-        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
-        table_data = []
-        # Header row with wrap for "%" only
-        header_row = []
-        for col in display_cols:
-            if col.endswith(" %"):
-                header_row.append(Paragraph("<b>%</b>", hdr_style))
-            else:
-                header_row.append(Paragraph(f"<b>{col}</b>", hdr_style))
-        table_data.append(header_row)
-        # Data rows
-        for _, row in df_ent[display_cols].iterrows():
-            table_data.append([str(row[col]) for col in display_cols])
-    
-        # 5) Compute column widths: Name=3, each stat=3, each "%"=1
-        ratios = [3] + sum([[3,1] for _ in objective_fields], [])
-        total = sum(ratios)
-        colWidths = [doc.width * r / total for r in ratios]
-    
-        # 6) Create table
-        tbl = Table(table_data, repeatRows=1, colWidths=colWidths)
-    
-        # 7) Style table
-        cmds = [
-            ("GRID",       (0,0), (-1,-1), 0.3, colors.grey),
-            ("BACKGROUND",(0,0),  (-1,0),   colors.lightgrey),
-            ("FONTSIZE",  (0,0),  (-1,0),   6),  # header
-            ("FONTSIZE",  (0,1),  (-1,-1),   5),  # body
-            ("ALIGN",      (0,0), (-1,-1), "CENTER"),
-        ]
-        for ridx, row in enumerate(table_data[1:], start=1):
-            for cidx, cell in enumerate(row):
-                if display_cols[cidx].endswith(" %"):
-                    try:
-                        val = float(cell.replace("%",""))
-                        stat = objective_fields[cidx//2]
-                        diff = abs(val - objectives[stat])
-                    except:
-                        continue
-                    if diff <= 5:
-                        bg = HexColor("#c8e6c9")
-                    elif diff <= 10:
-                        bg = HexColor("#fff9c4")
-                    elif diff <= 15:
-                        bg = HexColor("#ffe0b2")
-                    elif diff <= 20:
-                        bg = HexColor("#ffcdd2")
-                    else:
-                        continue
-                    cmds.append(("BACKGROUND", (cidx, ridx), (cidx, ridx), bg))
-    
-        tbl.setStyle(TableStyle(cmds))
-        elems.append(tbl)
-    
-        # 8) Build PDF and offer download
-        doc.build(elems)
-        pdf_bytes = buffer.getvalue()
-        st.download_button(
-            "Télécharger le PDF",
-            data=pdf_bytes,
-            file_name=f"ObjEntrain_{sel_date.strftime('%Y%m%d')}.pdf",
-            mime="application/pdf"
-        )
 
 
 
