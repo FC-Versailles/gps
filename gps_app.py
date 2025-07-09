@@ -175,7 +175,9 @@ player_positions = {
     "ZEMOURA":    "ATT",
     "BASQUE":     "M",
     "KOUASSI":    "M",
-    "ODZOUMO":    "ATT"
+    "ODZOUMO":    "ATT",
+    "TRAORE":     "M",
+    "KOFFI":      "ATT"
 }
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
@@ -406,7 +408,6 @@ elif page == "Entrainement":
 
         st.markdown(f"#### Objectifs du {sel_date}")
         objectives = {}
-        # sliders in two rows
         row1, row2 = objective_fields[:5], objective_fields[5:]
         cols5 = st.columns(5)
         for cont, stat in zip(cols5, row1):
@@ -417,7 +418,6 @@ elif page == "Entrainement":
             with cont:
                 objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
 
-        # prepare raw data
         df_ent = date_df[["Name"] + objective_fields].copy()
         for c in objective_fields:
             cleaned = (
@@ -429,22 +429,15 @@ elif page == "Entrainement":
             num = pd.to_numeric(cleaned, errors="coerce")
             df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
 
-        # percent vs reference
         ref_idx = Refmatch.set_index("Name")
         for c in objective_fields:
             df_ent[f"{c} %"] = df_ent.apply(
                 lambda r: round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
-                if (
-                    r["Name"] in ref_idx.index
-                    and pd.notna(r[c])
-                    and pd.notna(ref_idx.at[r["Name"], c])
-                    and ref_idx.at[r["Name"], c] > 0
-                )
+                if (r["Name"] in ref_idx.index and pd.notna(r[c]) and pd.notna(ref_idx.at[r["Name"], c]) and ref_idx.at[r["Name"], c] > 0)
                 else pd.NA,
                 axis=1
             )
 
-        # add overall mean
         mean_data = {"Name": "Moyenne"}
         for c in objective_fields:
             raw_mean = df_ent[c].mean(skipna=True)
@@ -453,22 +446,16 @@ elif page == "Entrainement":
             mean_data[f"{c} %"] = round(pct_mean, 1)
         df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
 
-                # add position column for display (normalize to uppercase keys)
         df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
-
-        # separate mean
         overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
-        players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()[df_ent["Name"] != "Moyenne"].copy()
+        players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
 
-        # define and group by position order
         pos_order = ["ATT","DC","M","PIS","PIST"]
         grouped = []
         for pos in pos_order:
             grp = players_only[players_only["Pos"] == pos].sort_values("Name")
-            if grp.empty:
-                continue
+            if grp.empty: continue
             grouped.append(grp)
-            # mean per position
             mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
             for c in objective_fields:
                 vals = grp[c]
@@ -476,92 +463,158 @@ elif page == "Entrainement":
                 mean_vals[f"{c} %"] = round(grp[f"{c} %"].mean(skipna=True),1)
             grouped.append(pd.DataFrame([mean_vals]))
         others = players_only[~players_only["Pos"].isin(pos_order)].sort_values("Name")
-        if not others.empty:
-            grouped.append(others)
+        if not others.empty: grouped.append(others)
         grouped.append(overall_mean)
         df_sorted = pd.concat(grouped, ignore_index=True)
-
-                # blank Pos for Moyenne rows
         df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
 
-                # blank Pos for Moyenne rows
-        df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
-
-        # build styler: include Pos and styling
         display_cols = ["Name","Pos"] + sum([[c, f"{c} %"] for c in objective_fields], [])
         df_display = df_sorted.loc[:, display_cols]
 
-        # 1) alternate row colors for clarity
         def alternate_colors(row):
-            if row['Name'].startswith('Moyenne'):
-                return [''] * len(display_cols)
-            # even index -> gray, odd -> white
+            if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
             color = '#EDE8E8' if row.name % 2 == 0 else 'white'
             return [f'background-color:{color}'] * len(display_cols)
 
-        # 2) highlight Moyenne rows in gold
         def highlight_moyenne(row):
-            if row['Name'].startswith('Moyenne'):
-                return ['background-color:#CFB013'] * len(display_cols)
+            if row['Name'] == 'Moyenne':
+                return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
+            elif row['Name'].startswith('Moyenne '):
+                return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
             return [''] * len(display_cols)
 
         styled = df_display.style
-        # apply alternate colors first
         styled = styled.apply(alternate_colors, axis=1)
-        # then override Moyenne rows
         styled = styled.apply(highlight_moyenne, axis=1)
-
-        # formatting numbers
         styled = styled.format({**{c:'{:.0f}' for c in objective_fields if c!='Vmax'}, **{'Vmax':'{:.1f}'}, **{f"{c} %":"{:.1f} %" for c in objective_fields}})
 
-        # highlight % columns against objectives
         def hl(v, obj):
             if pd.isna(v): return ""
             d = abs(v - obj)
             if d <= 5: return "background-color:#c8e6c9;"
             if d <= 10: return "background-color:#fff9c4;"
             if d <= 15: return "background-color:#ffe0b2;"
-            if d <= 20: return "background-color:#ffcdd2;"
+            if d <= 100: return "background-color:#ffcdd2;"
             return ""
         for stat in objective_fields:
             styled = styled.applymap(lambda v, obj=objectives[stat]: hl(v,obj), subset=[f"{stat} %"])
 
-        # hide index via CSS and style header
         styled = styled.set_table_styles([
-            {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white')]},
+            {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
             {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
             {'selector': 'th.blank', 'props': 'display:none;'}
         ], overwrite=False)
         styled = styled.set_table_attributes('class="centered-table"')
 
-        # render HTML
         import re
         html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
-        # update wrapper header color and maintain cell styling
+
+        # ── STREAMLIT HTML RENDER (auto-height to show all rows) ──────────────
+        total_rows = df_sorted.shape[0] + 1            # +1 for the header
+        header_height = 30                             # px
+        row_height = 28                                # px per row
+        iframe_height = header_height + total_rows * row_height
+
         wrapper = f"""
-        <html><head><style>
-        .centered-table{{font-size:10px;border-collapse:collapse;width:100%;}}
-        .centered-table th, .centered-table td{{text-align:center;padding:2px 4px;border:1px solid #ddd;}}
-        .centered-table th{{background-color:#0031E3;color:white;}}
-        </style></head><body>
-        <div style=\"max-height:{max(300,len(df_sorted)*30)}px;overflow-y:auto;\">{html_obj}</div>
-        </body></html>
+        <html>
+          <head>
+            <style>
+              .centered-table{{border-collapse:collapse;width:100%;}}
+              .centered-table th {{font-size:14px; padding:6px 8px; text-align:center;}}
+              .centered-table td {{font-size:12px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
+              .centered-table th, .centered-table td {{border:1px solid #ddd;}}
+              .centered-table th{{background-color:#0031E3;color:white;}}
+            </style>
+          </head>
+          <body>{html_obj}</body>
+        </html>
         """
-        components.html(wrapper, height=400, scrolling=True)
+        components.html(wrapper, height=iframe_height, scrolling=False)
 
+# ── Export PDF with same colored table fit to A4 landscape ───────────────
+    if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
+        styles = getSampleStyleSheet()
+        normal = styles["Normal"]
 
-    # ── PDF export ─────────────────────────────────────────────────────────────
-    if PDF_ENABLED and st.button("📥 Exporter en PDF"):
-        import io, requests
-        from reportlab.lib.pagesizes import landscape, A4
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
-        from reportlab.lib import colors
-        from reportlab.lib.colors import HexColor
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        # Header
+        hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=6, leading=7, textColor=HexColor('#0031E3'))
+        resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
+        logo = Image(io.BytesIO(resp.content), width=25, height=25)
+        hdr_data = [
+            Paragraph("<b>Entraînement Objectifs</b>", hdr_style),
+            Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
+            logo
+        ]
+        hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
+        hdr_tbl.setStyle(TableStyle([
+            ('ALIGN',(0,0),(0,0),'LEFT'),
+            ('ALIGN',(1,0),(1,0),'CENTER'),
+            ('ALIGN',(2,0),(2,0),'RIGHT'),
+            ('BOTTOMPADDING',(0,0),(-1,-1),2)
+        ]))
 
-        logo_url = "https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png"
+        # Parse styled HTML table, drop the index
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html_obj, 'html.parser')
+        rows = soup.select('tr')
+        data = []
+        cell_styles = []
+        for i, tr in enumerate(rows):
+            all_cols = tr.find_all(['th','td'])
+            cols = all_cols[1:]  # drop index column
+            row_vals = [col.get_text(strip=True) for col in cols]
+            data.append(row_vals)
+            for j, col in enumerate(cols):
+                style = col.get('style','')
+                bg = None; fg = None
+                for rule in style.split(';'):
+                    if 'background-color' in rule:
+                        bg = HexColor(rule.split(':')[1])
+                    if 'color:' in rule:
+                        fg = HexColor(rule.split(':')[1])
+                if bg:
+                    cell_styles.append(('BACKGROUND',(j,i),(j,i),bg))
+                if fg:
+                    cell_styles.append(('TEXTCOLOR',(j,i),(j,i),fg))
+            # only overall mean row in gold
+            first_val = row_vals[0] if row_vals else ''
+            if first_val == 'Moyenne':
+                cell_styles.append(('BACKGROUND',(0,i),(-1,i),HexColor('#CFB013')))
+                cell_styles.append(('TEXTCOLOR',(0,i),(-1,i),colors.black))
 
+        # Column widths: name and pos then stats
+        ncols = len(data[0]) if data else 1
+        if ncols > 2:
+            name_w = 0.10; pos_w = 0.04
+            other_w = (1 - name_w - pos_w) / (ncols - 2)
+            colWidths = [doc.width * name_w, doc.width * pos_w] + [doc.width * other_w] * (ncols - 2)
+        else:
+            colWidths = [doc.width / ncols] * ncols
 
+        pdf_tbl = Table(data, colWidths=colWidths, repeatRows=1)
+        pdf_tbl.hAlign = 'CENTER'
+
+        base_styles = [
+            ('GRID',(0,0),(-1,-1),0.3,colors.grey),
+            ('BACKGROUND',(0,0),(-1,0),HexColor('#0031E3')),
+            ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('FONTSIZE',(0,0),(-1,0),8),('FONTSIZE',(0,1),(-1,-1),6),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2),
+            ('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)
+        ]
+        pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
+
+        elements = [hdr_tbl, Spacer(1,4), pdf_tbl]
+        doc.build(elements)
+        st.download_button(
+            label="📥 Télécharger le PDF", data=buf.getvalue(),
+            file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
+        )
 
 
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
